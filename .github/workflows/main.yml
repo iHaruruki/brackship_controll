@@ -1,0 +1,59 @@
+name: Validate ROS2 Package
+
+on:
+  schedule:
+    - cron: '0 22 * * *'  # 毎日日本時間朝7:00に実行 (UTC 22:00)
+  push:
+    branches:
+      - main
+
+jobs:
+  validate_ros2_package:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up ROS2 Humble
+        run: |
+          sudo apt update && sudo apt install -y curl gnupg lsb-release
+          sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.asc | sudo gpg --dearmor -o /usr/share/keyrings/ros-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/ros2-latest.list > /dev/null
+          sudo apt update
+          sudo apt install -y ros-humble-desktop python3-colcon-common-extensions python3-rosdep
+          sudo rosdep init || true
+          rosdep update
+
+      - name: Build workspace
+        run: |
+          source /opt/ros/humble/setup.bash
+          colcon build
+
+      - name: Validate Roboware_node
+        run: |
+          source /opt/ros/humble/setup.bash
+          source install/setup.bash
+          nohup ros2 run Robowarepkg Roboware_node > roboware_node.log 2>&1 &
+          sleep 5
+          pkill -f "ros2 run Robowarepkg Roboware_node"
+          if grep -q "ERROR" roboware_node.log; then
+            cat roboware_node.log
+            exit 1
+          fi
+
+      - name: Skip serial_send_node validation
+        run: |
+          echo "Skipping serial_send_node validation as it depends on serial port hardware."
+
+      - name: Validate web_socket_node
+        run: |
+          source /opt/ros/humble/setup.bash
+          source install/setup.bash
+          nohup ros2 run Robowarepkg web_socket_node > web_socket_node.log 2>&1 &
+          sleep 5
+          pkill -f "ros2 run Robowarepkg web_socket_node"
+          if grep -q "ERROR" web_socket_node.log; then
+            cat web_socket_node.log
+            exit 1
+          fi
