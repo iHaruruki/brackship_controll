@@ -8,11 +8,16 @@ endif()
 # find dependencies
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
-find_package(std_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
 
-add_executable(brackship_controll src/serial.cpp src/brackship_controll.cpp) 
+add_executable(brackship_controll src/serial.cpp src/main.cpp) 
 target_compile_features(brackship_controll PRIVATE c_std_99 cxx_std_17)
-ament_target_dependencies(brackship_controll rclcpp std_msgs)
+ament_target_dependencies(brackship_controll
+  rclcpp
+  geometry_msgs
+  sensor_msgs
+)
 
 install(
   TARGETS brackship_controll
