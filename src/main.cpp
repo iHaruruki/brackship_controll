@@ -115,6 +115,7 @@ public:
             return serial.Write2(smsg, 7);
         }
     }
+
     rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr mCountEncoder;
     rclcpp::Node::SharedPtr node_;
     CSerial serial;
@@ -122,7 +123,6 @@ public:
     int curr, curl;
     int cnt_setspeed;
     char status_MotorPW;
-public:
     unsigned int enc_r, enc_l;
 
 private:
