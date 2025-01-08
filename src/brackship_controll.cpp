@@ -1,17 +1,16 @@
 #include <rclcpp/rclcpp.hpp>
-#include <geometry_msgs/msg/twist.hpp>
+#include <geometry_msgs/msg/twist_stamped.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2_ros/transform_broadcaster.h>
-#include <geometry_msgs/msg/transform_stamped.hpp>
 #include "../include/brackship_controll/serial.hpp"
 #include <vector>
 
-class BrackShipDriver : public rclcpp::Node
+class BlackShipController : public rclcpp::Node
 {
 public:
-    BrackShipDriver() : Node("brackship_driver"), x_(0.0), y_(0.0), theta_(0.0)
+    BlackShipController() : Node("blackship_controller"), x_(0.0), y_(0.0), theta_(0.0)
     {
         // シリアルポートの設定
         if (!serial_.InitSerial((char*)"/dev/ttyUSB0", B19200))
@@ -20,70 +19,69 @@ public:
             rclcpp::shutdown();
         }
 
-        // cmd_vel購読
-        cmd_vel_sub_ = this->create_subscription<geometry_msgs::msg::Twist>(
-            "cmd_vel", 10, std::bind(&BrackShipDriver::cmd_vel_callback, this, std::placeholders::_1));
+        // トピックの購読とパブリッシュ
+        twist_sub_ = this->create_subscription<geometry_msgs::msg::TwistStamped>(
+            "joy_input", 10, std::bind(&BlackShipController::twistStampedCallback, this, std::placeholders::_1));
 
-        // エンコーダデータのパブリッシュ
-        encoder_pub_ = this->create_publisher<sensor_msgs::msg::JointState>("joint_states", 10);
+        encoder_pub_ = this->create_publisher<sensor_msgs::msg::JointState>("encoder_publish", 10);
         odom_pub_ = this->create_publisher<nav_msgs::msg::Odometry>("/odom", 10);
 
         // Transform Broadcasterの初期化
         tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(this);
 
+        // タイマーでエンコーダデータの読み取り
         timer_ = this->create_wall_timer(
-            std::chrono::milliseconds(100), std::bind(&BrackShipDriver::read_encoder_data, this));
+            std::chrono::milliseconds(100), std::bind(&BlackShipController::readEncoderData, this));
     }
 
 private:
-    void cmd_vel_callback(const geometry_msgs::msg::Twist::SharedPtr msg)
+    void twistStampedCallback(const geometry_msgs::msg::TwistStamped::SharedPtr msg)
     {
-         //速度指令の制限
-        double cmd_linear_x = std::clamp(msg->linear.x, -MAX_LINEAR,MAX_LINEAR);
-        double cmd_linear_y = std::clamp(msg->linear.y, -MAX_LINEAR,MAX_LINEAR);
-        double cmd_angular_z = std::clamp(msg->angular.z, -MAX_ANGULAR, MAX_ANGULAR);
-
-        {
-            std::lock_guard<std::mutex> lock(cmd_mutex_);
-            target_linear_x_ = cmd_linear_x;
-            target_linear_y_ = cmd_linear_y;
-            target_angular_z_ = cmd_angular_z;
-        }
-        // int right_speed = static_cast<int>(msg->linear.x + msg->angular.z);
-        // int left_speed = static_cast<int>(msg->linear.x - msg->angular.z);
-
-        // uint8_t command[7] = {0x02, 0x01, 0x07, 0xF0,
-        //                       static_cast<uint8_t>(right_speed), static_cast<uint8_t>(left_speed), 0x03};
-        // serial_.Write2(command, 7);
+        double input_vel = limitVel(msg->twist.linear.x, msg->twist.angular.z);
+        setSpeed(input_vel, msg->twist.angular.z);
     }
 
-    void limitVel(double _vel, double _avel)
+    double limitVel(double vel, double avel)
     {
-        mInputVel = limitMaxMin(_vel, MAX_V, -MAX_V);
-        mInputAVel = limitMaxMin(_avel, MAX_W, -MAX_W);
-	    setSpeed(mInputVel, mInputAVel);
+        double max_v = 0.3;
+        double max_w = 0.5;
+        double limited_vel = std::max(std::min(vel, max_v), -max_v);
+        double limited_avel = std::max(std::min(avel, max_w), -max_w);
+        return limited_vel;
     }
 
-    void read_encoder_data()
+    void setSpeed(double vel, double avel)
     {
-        uint8_t command[5] = {0x02, 0x01, 0x05, 0xF9, 0x03};
-        serial_.Write2(command, 5);
+        int left_speed = static_cast<int>((vel - avel) * 100);
+        int right_speed = static_cast<int>((vel + avel) * 100);
 
-        uint8_t response[10] = {0};
-        serial_.Read2(response, 10);
+        unsigned char motor_send_R[7] = {0x02, 0x01, 0x07, 0x00, static_cast<unsigned char>(right_speed), 0x00, 0x03};
+        unsigned char motor_send_L[7] = {0x02, 0x02, 0x07, 0x00, static_cast<unsigned char>(left_speed), 0x00, 0x03};
 
-        if (response[0] == 0x02 && response[9] == 0x03)
+        serial_.Write2(motor_send_R, 7);
+        serial_.Write2(motor_send_L, 7);
+    }
+
+    void readEncoderData()
+    {
+        unsigned char encoder_send[5] = {0x02, 0x02, 0x05, 0x09, 0x03};
+        unsigned char encoder_recv[10] = {0};
+
+        serial_.Write2(encoder_send, 5);
+        serial_.Read2(encoder_recv, 10);
+
+        if (encoder_recv[0] == 0x02 && encoder_recv[9] == 0x03)
         {
-            int right_count = (response[5] << 8) | response[6];
-            int left_count = (response[7] << 8) | response[8];
+            int encoder_right = (encoder_recv[5] << 8) | encoder_recv[6];
+            int encoder_left = (encoder_recv[7] << 8) | encoder_recv[8];
 
             double wheel_separation = 0.5;  // 車輪間の距離[m]
             double wheel_radius = 0.15;     // 車輪の半径[m]
             double ticks_per_revolution = 500.0;
             double distance_per_tick = (2 * M_PI * wheel_radius) / ticks_per_revolution;
 
-            double right_distance = right_count * distance_per_tick;
-            double left_distance = left_count * distance_per_tick;
+            double right_distance = encoder_right * distance_per_tick;
+            double left_distance = encoder_left * distance_per_tick;
             double delta_distance = (right_distance + left_distance) / 2.0;
             double delta_theta = (right_distance - left_distance) / wheel_separation;
 
@@ -111,12 +109,6 @@ private:
 
             odom_pub_->publish(odom_msg);
 
-            // エンコーダデータのパブリッシュ
-            auto joint_state = sensor_msgs::msg::JointState();
-            joint_state.name = {"right_wheel", "left_wheel"};
-            joint_state.position = {static_cast<double>(right_count), static_cast<double>(left_count)};
-            encoder_pub_->publish(joint_state);
-
             // TFのブロードキャスト
             geometry_msgs::msg::TransformStamped odom_tf;
             odom_tf.header.stamp = this->now();
@@ -133,11 +125,18 @@ private:
             odom_tf.transform.rotation.w = q.w();
 
             tf_broadcaster_->sendTransform(odom_tf);
+
+            // エンコーダデータのパブリッシュ
+            sensor_msgs::msg::JointState encoder_msg;
+            encoder_msg.header.stamp = this->now();
+            encoder_msg.name = {"left_wheel", "right_wheel"};
+            encoder_msg.position = {static_cast<double>(encoder_left), static_cast<double>(encoder_right)};
+            encoder_pub_->publish(encoder_msg);
         }
     }
 
     CSerial serial_;
-    rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_sub_;
+    rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr twist_sub_;
     rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr encoder_pub_;
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
     std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
@@ -146,10 +145,10 @@ private:
     double x_, y_, theta_;
 };
 
-int main(int argc, char *argv[])
+int main(int argc, char **argv)
 {
     rclcpp::init(argc, argv);
-    rclcpp::spin(std::make_shared<BrackShipDriver>());
+    rclcpp::spin(std::make_shared<BlackShipController>());
     rclcpp::shutdown();
     return 0;
 }
