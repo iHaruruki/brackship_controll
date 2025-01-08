@@ -2,4 +2,4 @@
 
 ubuntu22.04-ROS2_Humble
 
-ROS版Brackship ドライバー
+ROS2版Brackship ドライバー
