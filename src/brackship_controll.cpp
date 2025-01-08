@@ -38,12 +38,30 @@ public:
 private:
     void cmd_vel_callback(const geometry_msgs::msg::Twist::SharedPtr msg)
     {
-        int right_speed = static_cast<int>(msg->linear.x + msg->angular.z);
-        int left_speed = static_cast<int>(msg->linear.x - msg->angular.z);
+         //速度指令の制限
+        double cmd_linear_x = std::clamp(msg->linear.x, -MAX_LINEAR,MAX_LINEAR);
+        double cmd_linear_y = std::clamp(msg->linear.y, -MAX_LINEAR,MAX_LINEAR);
+        double cmd_angular_z = std::clamp(msg->angular.z, -MAX_ANGULAR, MAX_ANGULAR);
 
-        uint8_t command[7] = {0x02, 0x01, 0x07, 0xF0,
-                              static_cast<uint8_t>(right_speed), static_cast<uint8_t>(left_speed), 0x03};
-        serial_.Write2(command, 7);
+        {
+            std::lock_guard<std::mutex> lock(cmd_mutex_);
+            target_linear_x_ = cmd_linear_x;
+            target_linear_y_ = cmd_linear_y;
+            target_angular_z_ = cmd_angular_z;
+        }
+        // int right_speed = static_cast<int>(msg->linear.x + msg->angular.z);
+        // int left_speed = static_cast<int>(msg->linear.x - msg->angular.z);
+
+        // uint8_t command[7] = {0x02, 0x01, 0x07, 0xF0,
+        //                       static_cast<uint8_t>(right_speed), static_cast<uint8_t>(left_speed), 0x03};
+        // serial_.Write2(command, 7);
+    }
+
+    void limitVel(double _vel, double _avel)
+    {
+        mInputVel = limitMaxMin(_vel, MAX_V, -MAX_V);
+        mInputAVel = limitMaxMin(_avel, MAX_W, -MAX_W);
+	    setSpeed(mInputVel, mInputAVel);
     }
 
     void read_encoder_data()
